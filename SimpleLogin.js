@@ -1,8 +1,8 @@
 var Account = {
-	UserName :	 	undefined,
-	SteamID	:	 	undefined,
-	Password :	 	undefined,
-	ConnectedPos:	undefined,
+	UserName :	 	"",
+	SteamID	:	 	"",
+	Password :	 	"",
+	ConnectedPos:		"",
 	LoggedIn :	 	false,
 	Spawned	:	 	false
 };
@@ -29,9 +29,12 @@ var SimpleLogin = {
 		return this.DecryptPassword(this.Ini.Get("DefConfig", "Password"));
 	};
 	SimpleLogin.IsRegistered = function(Player){				// done
-		if(DataStore.Get(this.DStable + "_Accounts", Player.SteamID) == undefined)
-			return false;
-		return true;
+		switch(this.SaveMethod){
+			case "ds":
+				return !DataStore.Get(this.DStable + "_Accounts", Player.SteamID)?false:true;
+			default:
+				return Plugin.IniExists("Accounts\\" + Player.SteamID)?true:false;
+		}
 	};
 	SimpleLogin.GetAccount = function(Player){
 		switch(this.SaveMethod){
@@ -39,11 +42,21 @@ var SimpleLogin = {
 				return IRWTJSON.parse(DataStore.Get(this.DStable + "_Accounts", Player.SteamID));
 			default:
 				return this.AccountFromIni(Player);
-				
 		}
 	};
 	SimpleLogin.SaveAccount = function(Player, acc){
-		DataStore.Add(this.DStable + "_Accounts", Player.SteamID, IRWTJSON.stringify(acc));
+		switch(this.SaveMethod){
+			case "ds":
+				DataStore.Add(this.DStable + "_Accounts", Player.SteamID, IRWTJSON.stringify(acc));
+			break;
+			case "ini":
+				this.AccountToIni(Player, acc);
+			break;
+			default:
+				this.AccountToIni(Player, acc);
+				DataStore.Add(this.DStable + "_Accounts", Player.SteamID, IRWTJSON.stringify(acc));
+			break;
+		}
 	};
 	SimpleLogin.AccountToIni = function(Player, acc){
 		if(!Plugin.IniExists("Accounts\\" + Player.SteamID)){
@@ -73,17 +86,18 @@ var SimpleLogin = {
 		}
 	};
 	SimpleLogin.CopyAccountsToIni = function(){
-		var settings = 
+		var settings = DataStore.GetKeys();
 	};
 	SimpleLogin.Connect = function(Player){				// testme
 		if(!this.IsRegistered(Player)){
 			var acc	= Account;
-			acc.UserName = Player.Name;
-			acc.SteamID	= Player.SteamID;
+			acc.UserName = Player.Name + "";
+			acc.SteamID	= Player.SteamID + "";
 			acc.Password = "";
 			acc.ConnectedPos = Player.X + "|" + (Player.Y + 3) + "|" + Player.Z;
 			acc.LoggedIn = false;
 			acc.Spawned	= false;
+			UnityEngine.Debug.Log(acc.UserName);
 			Util.ConsoleLog(ok_color + "SimpleLogin: New player registered: " + Player.Name, false);
 			this.SaveAccount(Player, acc);
 		} else {
@@ -127,16 +141,13 @@ var SimpleLogin = {
 	
 }());
 
-function On_PlayerConnected(Player){
+function On_PlayerSpawned(Player){
 	SimpleLogin.Connect(Player);
 }
 
 function On_PluginInit(){
 	try{
-		var a = Plugin.GetInis("Accounts\\");
-		for(var ini in a){
-			UnityEngine.Debug.Log(ini.GetSetting("a", "b"));
-		}
+//		DataStore.Flush(SimpleLogin.DStable + "_Accounts");
 		var state = Plugin.GetIni("SL_Config").GetSetting("Main", "SaveAccounts");
 		var saveto = DataStore.Get(SimpleLogin.DStable + "_Config", "Config_SaveAccountsTo");
 		if(!saveto) DataStore.Add(SimpleLogin.DStable + "_Config", "Config_SaveAccountsTo", "ini");
