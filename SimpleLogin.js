@@ -2,7 +2,7 @@ var Account = {
 	UserName :	 	"",
 	SteamID	:	 	"",
 	Password :	 	"",
-	ConnectedPos:		"",
+	ConnectedPos:	"",
 	LoggedIn :	 	false,
 	Spawned	:	 	false
 };
@@ -25,8 +25,34 @@ var SimpleLogin = {
 	var ok_color	= "[color #33CC33]";
 	var warn_color	= "[color #FFD633]";
 	
+	SimpleLogin.Init = function(){
+		var state = Plugin.GetIni("SL_Config").GetSetting("Main", "SaveAccounts");
+		var saveto = DataStore.Get(SimpleLogin.DStable + "_Config", "Config_SaveAccountsTo");
+		if(!saveto) DataStore.Add(SimpleLogin.DStable + "_Config", "Config_SaveAccountsTo", "ini");
+		if(state != saveto){
+			switch(state){
+				case "ds":
+					SimpleLogin.CopyAccountsToDS();
+				break;
+				case "ini":
+					SimpleLogin.CopyAccountsToIni();
+				break;
+				case "both":
+					saveto=="ini"?SimpleLogin.CopyAccountsToDS():SimpleLogin.CopyAccountsToIni();
+				break;
+			}
+			DataStore.Add(SimpleLogin.DStable + "_Config", "Config_SaveAccountsTo", state);
+		}
+		Plugin.CreateDir("Accounts");
+		Util.ConsoleLog(ok_color + "SimpleLogin: Loaded!", true);
+		UnityEngine.Debug.Log("SimpleLogin: Loaded!");
+		if(DataStore.GetTable(this.DStable + "_Spawner").Count){
+			Plugin.CreateTimer("SL_Spawner", parseInt(this.GetConfig("SpawnerInterval"))).Start();
+		}
+	};
+	
 	SimpleLogin.GetDefaultPass = function(){				// done
-		return this.DecryptPassword(this.Ini.Get("DefConfig", "Password"));
+		return this.DecryptPassword(this.GetConfig("DefConfig", "Password"));
 	};
 	SimpleLogin.IsRegistered = function(Player){				// done
 		switch(this.SaveMethod){
@@ -97,27 +123,43 @@ var SimpleLogin = {
 			acc.ConnectedPos = Player.X + "|" + (Player.Y + 3) + "|" + Player.Z;
 			acc.LoggedIn = false;
 			acc.Spawned	= false;
-			UnityEngine.Debug.Log(acc.UserName);
 			Util.ConsoleLog(ok_color + "SimpleLogin: New player registered: " + Player.Name, false);
 			this.SaveAccount(Player, acc);
+			DataStore.Add(this.DStable + "_Spawner", Player.SteamID, IRWTJSON.stringify(acc));
 		} else {
 			var acc	= this.GetAccount(Player);
 			if(acc.UserName != Player.Name){
 				Util.ConsoleLog(ok_color + "SimpleLogin: " + warn_color + acc.UserName + " has changed name to: " + Player.Name, false);
 				acc.UserName = Player.Name;
 			}
-			acc.ConnectedPos = Player.X + "|" + (Player.Y + 3) + "|" + Player.Z;
+			acc.ConnectedPos = Player.X + "|" + (Player.Y + 1) + "|" + Player.Z;
 			acc.LoggedIn = false;
 			acc.Spawned	= false;
 			this.SaveAccount(Player, acc);
+			DataStore.Add(this.DStable + "_Spawner", Player.SteamID, IRWTJSON.stringify(acc));
+		}
+		if(!Plugin.GetTimer("SL_Spawner")){
+			Plugin.CreateTimer("SL_Spawner", parseInt(this.GetConfig("SpawnerInterval"))).Start();
 		}
 	};
-	SimpleLogin.Login = function(Player, Pwd){
+	SimpleLogin.SetPassword = function(Player, args){
 		if(!Player) return;
 		var acc	= this.GetAccount(Player);
-		if(acc.Password === this.DecryptPassword(Pwd)){
+		var pwd = argsToPass(args);
+		if(pwd){
+			acc.Password = this.EncryptPassword(pwd) + "";
+			this.SaveAccount(Player, acc);
+		}
+	};
+	
+	SimpleLogin.Login = function(Player, args){
+		if(!Player) return;
+		var acc	= this.GetAccount(Player);
+		var pwd = argsToPass(args);
+		if(acc.Password == this.EncryptPassword(pwd)){
 			acc.LoggedIn = true;
 			this.SaveAccount(Player, acc);
+			DataStore.Remove(this.DStable + "_Spawner", Player.SteamID);
 		} else {
 			Player.MessageFrom(this.Name, warn_color + "Wrong password!");
 		}
@@ -131,6 +173,7 @@ var SimpleLogin = {
 			this.SaveAccount(Player, acc);
 		}
 	};
+	
 	SimpleLogin.EncryptPassword = function(password){
 		return Security.Encrypt(password, "b64");
 	};
@@ -138,35 +181,80 @@ var SimpleLogin = {
 		return Security.Decrypt(password, "b64");
 	};
 	
+	SimpleLogin.GetConfig = function(config){
+		return Plugin.GetIni("SL_Config").GetSetting("Main", config);
+	};
+	
+	SimpleLogin.Spawner = function(){
+		var players = DataStore.Values(this.DStable + "_Spawner");
+		if(!players) Plugin.KillTimer("SL_SpawnerCallback");
+		for(var i = 0; i < players.Length; i++){
+			var player = players[i];
+			var pl = IRWTJSON.parse(player);
+			var Player = Magma.Player.FindBySteamID(pl.SteamID);
+			if(!Player) continue;
+			var pos = pl.ConnectedPos.split("|");
+			Player.TeleportTo(parseFloat(pos[0]), parseFloat(pos[1]), parseFloat(pos[2]));
+		}
+	};
+	
+	function argsToPass(args){
+		var pass = "";
+		if(args.Length > 0){
+			for(var i = 0; i < args.Length; i++) pass==""?pass+=args[i]:pass+=" "+args[i];
+		} else {
+			return undefined;
+		}
+		return pass==""?undefined:pass;
+	};
 	
 }());
 
 function On_PlayerSpawned(Player){
-	SimpleLogin.Connect(Player);
+	if(DataStore.Get(SimpleLogin.DStable + "_FirstSpawn", Player.SteamID)){
+		SimpleLogin.Connect(Player);
+		DataStore.Add(SimpleLogin.DStable + "_FirstSpawn", Player.SteamID, false);
+	}
+}
+
+function On_PlayerConnected(Player){
+	DataStore.Add(SimpleLogin.DStable + "_FirstSpawn", Player.SteamID, true);
+}
+
+function On_PlayerDisconnected(Player){
+	if(DataStore.Get(SimpleLogin.DStable + "_Spawner", Player.SteamID))
+		DataStore.Remove(SimpleLogin.DStable + "_Spawner", Player.SteamID);
+	SimpleLogin.Logout(Player);
+}
+
+function On_ServerInit(){
+	DataStore.Flush(SimpleLogin.DStable + "_Spawner");
 }
 
 function On_PluginInit(){
 	try{
-//		DataStore.Flush(SimpleLogin.DStable + "_Accounts");
-		var state = Plugin.GetIni("SL_Config").GetSetting("Main", "SaveAccounts");
-		var saveto = DataStore.Get(SimpleLogin.DStable + "_Config", "Config_SaveAccountsTo");
-		if(!saveto) DataStore.Add(SimpleLogin.DStable + "_Config", "Config_SaveAccountsTo", "ini");
-		if(state != saveto){
-			switch(state){
-				case "ds":
-					SimpleLogin.CopyAccountsToDS();
-				break;
-				case "ini":
-					SimpleLogin.CopyAccountsToIni();
-				break;
-				case "both":
-					saveto=="ini"?SimpleLogin.CopyAccountsToDS():SimpleLogin.CopyAccountsToIni();
-				break;
-			}
-			DataStore.Add(SimpleLogin.DStable + "_Config", "Config_SaveAccountsTo", state);
-		}
-		Plugin.CreateDir("Accounts");
-	} catch(err) {
+		SimpleLogin.Init();
+	} catch(err){
 		UnityEngine.Debug.Log(String(err));
 	}
+}
+
+function On_Command(Player, cmd, args){
+	switch(cmd){
+		case "password":
+		case "setpw":
+			if(args.Length > 0)
+				SimpleLogin.SetPassword(Player, args);
+			else Player.Message("/password password");
+		break;
+		case "login":
+			if(args.Length > 0)
+				SimpleLogin.Login(Player, args);
+			else Player.Message("/login password");
+		break;
+	}
+}
+
+function SL_SpawnerCallback(){
+	SimpleLogin.Spawner();
 }
